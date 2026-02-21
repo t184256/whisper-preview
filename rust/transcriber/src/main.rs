@@ -1,0 +1,243 @@
+mod session;
+
+use anyhow::Result;
+use clap::Parser;
+use futures_util::{FutureExt, SinkExt, StreamExt};
+use session::Session;
+use shared_protocol::{ClientMessage, ServerMessage};
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio::net::{TcpListener, TcpStream};
+use tokio_tungstenite::tungstenite::Message;
+use tracing::{error, info};
+use whisper_rs::{SamplingStrategy, WhisperContext, WhisperContextParameters};
+
+#[derive(Parser, Debug)]
+#[command(name = "transcriber")]
+struct Args {
+    #[arg(short, long, default_value = "[::]", help = "address to listen on")]
+    address: String,
+
+    #[arg(short, long, default_value = "8001", help = "port to listen on")]
+    port: u16,
+
+    #[arg(short, long, help = "path to whisper model file")]
+    model: String, // path to whisper model file
+
+    #[arg(long, help = "path to optional API token")]
+    token_file: Option<String>,
+
+    #[arg(
+        long,
+        help = "Best-of (default: 1, mutually exclusive with --beam-size)",
+        conflicts_with = "beam_size"
+    )]
+
+    best_of: Option<i32>,
+    #[arg(
+        long,
+        help = "Beam search size (mutually exclusive with --best-of)",
+        conflicts_with = "best_of"
+    )]
+    beam_size: Option<i32>,
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    tracing_subscriber::fmt::init();
+
+    let args = Args::parse();
+    let addr: SocketAddr = format!("{}:{}", args.address, args.port).parse()?;
+    info!("Loading whisper model: {}", args.model);
+
+    let ctx = {
+        let mut params = WhisperContextParameters::default();
+        params.flash_attn(true);
+        #[cfg(not(feature = "vulkan"))]
+        info!("Running on CPU");
+        #[cfg(feature = "vulkan")]
+        {
+            info!("Running with GPU acceleration (Vulkan)");
+            params.use_gpu(true);
+        }
+        Arc::new(WhisperContext::new_with_params(&args.model, params)?)
+    };
+
+    let expected_token = match &args.token_file {
+        Some(path) => {
+            info!("API token authentication enabled");
+            Some(
+                std::fs::read_to_string(path)
+                    .map(|s| s.trim().to_string())
+                    .unwrap_or_else(|e| {
+                        panic!("Failed to read {}: {}", path, e)
+                    }),
+            )
+        }
+        None => None,
+    };
+
+    // Configure sampling strategy
+    let sampling_strategy = match (args.beam_size, args.best_of) {
+        (Some(beam_size), None) => {
+            info!("Using beam search with beam_size={}", beam_size);
+            SamplingStrategy::BeamSearch {
+                beam_size,
+                patience: -1.0,
+            }
+        }
+        (None, Some(best_of)) => {
+            info!("Using greedy search with best_of={}", best_of);
+            SamplingStrategy::Greedy { best_of }
+        }
+        (None, None) => {
+            info!("Using greedy search with best_of=1 (default)");
+            SamplingStrategy::Greedy { best_of: 1 }
+        }
+        (Some(_), Some(_)) => {
+            unreachable!("beam_size and best_of are mutually exclusive")
+        }
+    };
+
+    info!("Listening on {}", addr);
+    let listener = TcpListener::bind(addr).await?;
+    while let Ok((stream, peer_addr)) = listener.accept().await {
+        info!("Connection from {}", peer_addr);
+        let ctx = ctx.clone();
+        let exp_token = expected_token.clone();
+        let strategy = sampling_strategy.clone();
+        tokio::spawn(async move {
+            if let Err(e) =
+                handle_connection(stream, ctx, exp_token, strategy).await
+            {
+                error!("Connection error: {}", e);
+            }
+        });
+    }
+    Ok(())
+}
+
+macro_rules! bail {
+    ($ws_sender:expr, $($arg:tt)*) => {{
+        let msg = format!($($arg)*);
+        let m = ServerMessage::Error { message: msg.clone() };
+        let m = serde_json::to_string(&m).unwrap();
+        let _ = $ws_sender.send(Message::Text(m)).await;
+        let _ = $ws_sender.send(Message::Close(None)).await;
+        return Err(anyhow::anyhow!(msg));
+    }};
+}
+
+async fn handle_connection(
+    stream: TcpStream,
+    ctx: Arc<WhisperContext>,
+    expected_token: Option<String>,
+    sampling_strategy: SamplingStrategy,
+) -> Result<()> {
+    let ws_stream = tokio_tungstenite::accept_async(stream).await?;
+    let (mut ws_sender, ws_receiver) = ws_stream.split();
+    let ws_receiver = ws_receiver.peekable();
+    futures_util::pin_mut!(ws_receiver);
+
+    // First wait for the mandatory Configure message:
+    let (token, language, context) = match ws_receiver.as_mut().next().await {
+        Some(Ok(Message::Text(text))) => {
+            match serde_json::from_str::<ClientMessage>(&text) {
+                Ok(ClientMessage::Configure {
+                    token,
+                    language,
+                    context,
+                }) => (token, language, context),
+                Ok(_) => bail!(ws_sender, "first message must be Configure"),
+                Err(e) => bail!(ws_sender, "failed to parse Configure : {}", e),
+            }
+        }
+        Some(Ok(_)) => bail!(ws_sender, "must send Configure first"),
+        Some(Err(e)) => bail!(ws_sender, "pre-configure error {}", e),
+        None => bail!(ws_sender, "connection closed before Configure"),
+    };
+
+    // Then check the token, if needed:
+    if let Some(ref expected) = expected_token {
+        match token {
+            Some(ref t) if t == expected => (),
+            Some(_) => bail!(ws_sender, "wrong API token"),
+            None => bail!(ws_sender, "missing API token"),
+        }
+    }
+    // Then configure the transcription session:
+    info!("Configured: language={:?}, context={:?}", language, context);
+    let mut session =
+        match Session::new(&ctx, language, context, sampling_strategy) {
+            Ok(s) => s,
+            Err(e) => bail!(ws_sender, "error creating session: {}", e),
+        };
+
+    // Finally, enter the normal drain-transcribe loop:
+    let mut finalized = false;
+    loop {
+        loop {
+            // drain
+            match ws_receiver.as_mut().next().now_or_never() {
+                Some(Some(Ok(msg))) => match msg {
+                    Message::Text(text) => {
+                        match serde_json::from_str::<ClientMessage>(&text) {
+                            Ok(ClientMessage::Configure { .. }) => bail!(
+                                ws_sender,
+                                "Configure sent after session started"
+                            ),
+                            Ok(ClientMessage::Advance { timestamp_cs }) => {
+                                if let Err(e) = session.advance(timestamp_cs) {
+                                    bail!(ws_sender, "advance failed: {}", e);
+                                };
+                                let time_s = timestamp_cs as f64 / 100.;
+                                info!("advanced to {:.2}s", time_s);
+                            }
+                            Ok(ClientMessage::EndOfStream) => {
+                                info!("end of audio stream");
+                                finalized = true;
+                            }
+                            Err(e) => {
+                                bail!(ws_sender, "cannot parse message: {}", e)
+                            }
+                        }
+                    }
+                    Message::Binary(data) => {
+                        if let Err(e) = session.decode_and_append_opus(&data) {
+                            bail!(ws_sender, "error decoding Opus: {}", e);
+                        }
+                    }
+                    Message::Ping(data) => {
+                        ws_sender.send(Message::Pong(data)).await?;
+                    }
+                    Message::Pong(_) | Message::Frame(_) => {}
+                    Message::Close(_) => bail!(ws_sender, "connection closed"),
+                },
+                Some(Some(Err(e))) => {
+                    bail!(ws_sender, "websocket error: {}", e)
+                }
+                Some(None) => bail!(ws_sender, "connection closed"),
+                None => break, // to transcribing
+            }
+        }
+        // transcribe
+        match session.transcribe(finalized) {
+            Ok(Some(msg)) => {
+                let json = serde_json::to_string(&msg)?;
+                ws_sender.send(Message::Text(json)).await?;
+            }
+            Ok(None) => {} // not enough audio
+            Err(e) => bail!(ws_sender, "Transcription error: {}", e),
+        }
+
+        if finalized {
+            break;
+        }
+
+        ws_receiver.as_mut().peek().await; // block without consuming
+    }
+
+    ws_sender.send(Message::Close(None)).await?;
+    info!("Session ended");
+    Ok(())
+}

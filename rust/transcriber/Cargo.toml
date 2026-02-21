@@ -1,0 +1,23 @@
+[package]
+name = "transcriber"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+shared-protocol = { path = "../shared-protocol" }
+tokio = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+whisper-rs = "0.15"
+opus = "0.3"
+clap = { version = "4.0", features = ["derive"] }
+
+[features]
+default = []
+vulkan = ["whisper-rs/vulkan"]
