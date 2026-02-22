@@ -59,7 +59,7 @@ impl Session {
             whisper_ctx: ctx,
             advance_cs: 0,
             transcribed_up_to_cs: 0,
-            advanced_since: 0,
+            advanced_since: false,
             sampling_strategy,
             opts,
         })
