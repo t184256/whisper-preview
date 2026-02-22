@@ -184,14 +184,15 @@ impl Session {
 
         let audio_duration = audio_f32.len() as f64 / SAMPLE_RATE as f64;
         let realtime_factor = audio_duration / duration;
+        let n_segments = state.full_n_segments();
         info!(
-            "transcribing {:.2}s-{:.2}s took {:.2}s at {:.2}x",
+            "transcribing {:.2}s-{:.2}s took {:.2}s at {:.2}x, {} segments",
             self.advance_cs as f64 / 100.,
             current_end_cs as f64 / 100.,
             duration,
-            realtime_factor
+            realtime_factor,
+            n_segments,
         );
-        let n_segments = state.full_n_segments();
 
         let mut complete = Vec::new();
         let mut incomplete = None;
