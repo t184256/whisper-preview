@@ -4,6 +4,7 @@ use shared_protocol::{
     ServerMessage, CS_SAMPLES, FRAME_SIZE_SAMPLES, SAMPLE_RATE,
 };
 use shared_vad::Vad;
+use std::ffi::c_int;
 use std::time::Instant;
 use tracing::info;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperState};
@@ -25,7 +26,8 @@ pub struct Session {
     accumulated_audio: Vec<i16>,
     whisper_state: WhisperState, // reuse state for performance
     vad: Vad,
-    advance_cs: i64, // total centiseconds dropped from the beginning
+    prompt_tokens: Vec<c_int>, // token IDs from last transcription, for context
+    advance_cs: i64, // total centiseconds advanced from the beginning
     transcribed_up_to_cs: i64, // end timestamp of the last transcription
     advanced_since: bool,
     sampling_strategy: SamplingStrategy,
@@ -56,6 +58,7 @@ impl Session {
             accumulated_audio: Vec::new(),
             whisper_state,
             vad: Vad::new(),
+            prompt_tokens: Vec::new(),
             advance_cs: 0,
             transcribed_up_to_cs: 0,
             advanced_since: false,
@@ -76,9 +79,13 @@ impl Session {
         Ok(())
     }
 
-    pub fn advance(&mut self, timestamp: i64) -> Result<()> {
+    pub fn advance(
+        &mut self,
+        timestamp: i64,
+        context: Option<shared_protocol::Segment>,
+    ) -> Result<()> {
         if timestamp <= self.advance_cs {
-            return Ok(()); // already dropped past this point
+            return Ok(()); // already advanced past this point
         }
 
         let drop_cs = timestamp - self.advance_cs;
@@ -88,13 +95,19 @@ impl Session {
             anyhow::bail!("cannot advance to {:.2}s", timestamp as f64 / 100.0);
         }
 
-        if drop_samples > 0 {
-            self.accumulated_audio.drain(0..drop_samples);
-            self.advance_cs = timestamp;
-            self.advanced_since = true; // force retranscription
-            self.vad.reset(); // and recalculate VAD from remaining audio
-            self.vad.consume(&self.accumulated_audio);
+        // use client-provided context segment for prompt tokens
+        self.prompt_tokens.clear();
+        if let Some(segment) = context {
+            for token in &segment.tokens {
+                self.prompt_tokens.push(token.id);
+            }
         }
+
+        self.accumulated_audio.drain(0..drop_samples);
+        self.advance_cs = timestamp;
+        self.advanced_since = true; // force retranscription
+        self.vad.reset(); // and recalculate VAD from remaining audio
+        self.vad.consume(&self.accumulated_audio);
 
         Ok(())
     }
@@ -134,10 +147,13 @@ impl Session {
         let mut params = FullParams::new(self.sampling_strategy.clone());
         params.set_language(self.language.as_deref()); // None = auto-detect
         params.set_suppress_nst(true);
+        params.set_max_tokens(0);
+        params.set_max_initial_ts(0.);
         params.set_print_progress(false);
         params.set_print_special(false);
         params.set_print_realtime(false);
         params.set_token_timestamps(true); // token-level timing
+        params.set_tokens(&self.prompt_tokens);
 
         if let Some(v) = self.opts.temperature_inc {
             params.set_temperature_inc(v);
@@ -207,6 +223,7 @@ impl Session {
                     // token timestamps are relative to buffer start
                     tokens.push(shared_protocol::Token {
                         text: token_text,
+                        id: token.token_id(),
                         start_cs: token_data.t0 + self.advance_cs,
                         end_cs: token_data.t1 + self.advance_cs,
                     });
