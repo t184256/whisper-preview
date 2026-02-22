@@ -9,6 +9,7 @@ use std::time::Instant;
 use tracing::info;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperState};
 
+const MAX_PROMPT_TOKENS: usize = 224; // half of whisper's 448-token context
 const MIN_FRAMES: u32 = 3; // do not transcribe if shorter than 3*60 = 180 ms
 const MIN_SAMPLES: usize = (MIN_FRAMES * FRAME_SIZE_SAMPLES) as usize;
 
@@ -27,7 +28,7 @@ pub struct Session {
     whisper_state: WhisperState, // reuse state for performance
     vad: Vad,
     prompt_tokens: Vec<c_int>, // token IDs from last transcription, for context
-    advance_cs: i64, // total centiseconds advanced from the beginning
+    advance_cs: i64,           // total centiseconds advanced from the beginning
     transcribed_up_to_cs: i64, // end timestamp of the last transcription
     advanced_since: bool,
     sampling_strategy: SamplingStrategy,
@@ -95,12 +96,12 @@ impl Session {
             anyhow::bail!("cannot advance to {:.2}s", timestamp as f64 / 100.0);
         }
 
-        // use client-provided context segment for prompt tokens
+        // use client-provided context segment for prompt tokens (keep tail)
         self.prompt_tokens.clear();
         if let Some(segment) = context {
-            for token in &segment.tokens {
-                self.prompt_tokens.push(token.id);
-            }
+            let from = segment.tokens.len().saturating_sub(MAX_PROMPT_TOKENS);
+            let token_ids = segment.tokens[from..].iter().map(|t| t.id);
+            self.prompt_tokens.extend(token_ids);
         }
 
         self.accumulated_audio.drain(0..drop_samples);
