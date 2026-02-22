@@ -209,8 +209,13 @@ async fn handle_connection(
                                 ws_sender,
                                 "Configure sent after session started"
                             ),
-                            Ok(ClientMessage::Advance { timestamp_cs }) => {
-                                if let Err(e) = session.advance(timestamp_cs) {
+                            Ok(ClientMessage::Advance {
+                                timestamp_cs,
+                                context,
+                            }) => {
+                                if let Err(e) =
+                                    session.advance(timestamp_cs, context)
+                                {
                                     bail!(ws_sender, "advance failed: {}", e);
                                 };
                                 let time_s = timestamp_cs as f64 / 100.;

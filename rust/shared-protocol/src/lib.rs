@@ -17,6 +17,7 @@ pub enum ClientMessage {
     // no explicit AudioChunk message - binary frames are implicitly audio
     Advance {
         timestamp_cs: i64, // forget audio before this, centiseconds from 0
+        context: Option<Segment>, // last confirmed segment, for token IDs
     },
     EndOfStream, // trigger final transcription
 }
@@ -24,6 +25,7 @@ pub enum ClientMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Token {
     pub text: String,
+    pub id: i32, // whisper token ID, needed for prompt context
     pub start_cs: i64,
     pub end_cs: i64,
 }

@@ -73,7 +73,11 @@ impl Session {
         Ok(())
     }
 
-    pub fn advance(&mut self, timestamp: i64) -> Result<()> {
+    pub fn advance(
+        &mut self,
+        timestamp: i64,
+        context: Option<shared_protocol::Segment>,
+    ) -> Result<()> {
         if timestamp <= self.advance_cs {
             return Ok(()); // already advanced past this point
         }
@@ -85,20 +89,11 @@ impl Session {
             anyhow::bail!("cannot advance to {:.2}s", timestamp as f64 / 100.0);
         }
 
-        // collect token IDs from the last confirmed segment as context
+        // use client-provided context segment for prompt tokens
         self.prompt_tokens.clear();
-        let n_segments = self.whisper_state.full_n_segments();
-        for i in (0..n_segments).rev() {
-            let Some(segment) = self.whisper_state.get_segment(i) else {
-                continue;
-            };
-            if segment.end_timestamp() + self.advance_cs <= timestamp {
-                for j in 0..segment.n_tokens() {
-                    if let Some(token) = segment.get_token(j) {
-                        self.prompt_tokens.push(token.token_id());
-                    }
-                }
-                break;
+        if let Some(segment) = context {
+            for token in &segment.tokens {
+                self.prompt_tokens.push(token.id);
             }
         }
 
@@ -216,6 +211,7 @@ impl Session {
                     }
                     tokens.push(shared_protocol::Token {
                         text: token_text,
+                        id: token.token_id(),
                         start_cs: token_data.t0 + self.advance_cs,
                         end_cs: token_data.t1 + self.advance_cs,
                     });
