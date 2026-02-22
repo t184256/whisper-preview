@@ -3,6 +3,7 @@ use opus::{Channels, Decoder};
 use shared_protocol::{
     ServerMessage, CS_SAMPLES, FRAME_SIZE_SAMPLES, SAMPLE_RATE,
 };
+use std::ffi::c_int;
 use std::time::Instant;
 use tracing::info;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperState};
@@ -16,7 +17,8 @@ pub struct Session {
     opus_decoder: Decoder,
     accumulated_audio: Vec<i16>,
     whisper_state: WhisperState, // reuse state for performance
-    advance_cs: i64, // total centiseconds dropped from the beginning
+    prompt_tokens: Vec<c_int>, // token IDs from last transcription, for context
+    advance_cs: i64, // total centiseconds advanced from the beginning
     transcribed_up_to_cs: i64, // end timestamp of the last transcription
     sampling_strategy: SamplingStrategy,
 }
@@ -42,6 +44,7 @@ impl Session {
             context,
             opus_decoder,
             accumulated_audio: Vec::new(),
+            prompt_tokens: Vec::new(),
             whisper_state,
             advance_cs: 0,
             transcribed_up_to_cs: 0,
@@ -62,7 +65,7 @@ impl Session {
 
     pub fn advance(&mut self, timestamp: i64) -> Result<()> {
         if timestamp <= self.advance_cs {
-            return Ok(()); // already dropped past this point
+            return Ok(()); // already advanced past this point
         }
 
         let drop_cs = timestamp - self.advance_cs;
@@ -72,10 +75,25 @@ impl Session {
             anyhow::bail!("cannot advance to {:.2}s", timestamp as f64 / 100.0);
         }
 
-        if drop_samples > 0 {
-            self.accumulated_audio.drain(0..drop_samples);
-            self.advance_cs = timestamp;
+        // collect token IDs from the last confirmed segment as context
+        self.prompt_tokens.clear();
+        let n_segments = self.whisper_state.full_n_segments();
+        for i in (0..n_segments).rev() {
+            let Some(segment) = self.whisper_state.get_segment(i) else {
+                continue;
+            };
+            if segment.end_timestamp() + self.advance_cs <= timestamp {
+                for j in 0..segment.n_tokens() {
+                    if let Some(token) = segment.get_token(j) {
+                        self.prompt_tokens.push(token.token_id());
+                    }
+                }
+                break;
+            }
         }
+
+        self.accumulated_audio.drain(0..drop_samples);
+        self.advance_cs = timestamp;
 
         Ok(())
     }
@@ -112,10 +130,13 @@ impl Session {
         let mut params = FullParams::new(self.sampling_strategy.clone());
         params.set_language(self.language.as_deref()); // None = auto-detect
         params.set_suppress_nst(true);
+        params.set_max_tokens(0);
+        params.set_max_initial_ts(0.);
         params.set_print_progress(false);
         params.set_print_special(false);
         params.set_print_realtime(false);
         params.set_token_timestamps(true); // token-level timing
+        params.set_tokens(&self.prompt_tokens);
 
         if let Some(ref prompt) = self.context {
             params.set_initial_prompt(prompt);
@@ -127,11 +148,10 @@ impl Session {
 
         self.transcribed_up_to_cs = current_end_cs;
 
-        let audio_duration =
-            self.accumulated_audio.len() as f64 / SAMPLE_RATE as f64;
+        let audio_duration = audio_f32.len() as f64 / SAMPLE_RATE as f64;
         let realtime_factor = audio_duration / duration;
         info!(
-            "transcribing range={:.2}s-{:.2}s took {:.2}s at {:.2}x",
+            "transcribing {:.2}s-{:.2}s took {:.2}s at {:.2}x",
             self.advance_cs as f64 / 100.,
             current_end_cs as f64 / 100.,
             duration,
@@ -141,6 +161,9 @@ impl Session {
 
         let mut complete = Vec::new();
         let mut incomplete = None;
+
+        let buffer_len_cs =
+            (self.accumulated_audio.len() as i64 * 100) / SAMPLE_RATE as i64;
 
         for i in 0..n_segments {
             let Some(segment) = self.whisper_state.get_segment(i) else {
@@ -155,7 +178,6 @@ impl Session {
             // extract token-level timing for precise merging
             let mut tokens = Vec::new();
             let n_tokens = segment.n_tokens();
-            let buffer_len_cs = (self.accumulated_audio.len() as i64 * 100) / SAMPLE_RATE as i64;
             for j in 0..n_tokens {
                 if let Some(token) = segment.get_token(j) {
                     let token_text = token.to_str_lossy()?.to_string();
@@ -168,7 +190,6 @@ impl Session {
                     if token_data.t0 >= buffer_len_cs {
                         continue;
                     }
-                    // token timestamps are relative to buffer start
                     tokens.push(shared_protocol::Token {
                         text: token_text,
                         start_cs: token_data.t0 + self.advance_cs,
@@ -190,9 +211,9 @@ impl Session {
 
             let segment = shared_protocol::Segment {
                 text: segment_text,
-                tokens,
                 start_cs: start_time,
                 end_cs: end_time,
+                tokens,
             };
 
             if i < n_segments - 1 {
@@ -206,11 +227,10 @@ impl Session {
             }
         }
 
-        // return all segments (client filters based on advance_cs)
         Ok(Some(ServerMessage::Transcription {
             complete,
             incomplete,
-            fast_preview: None, // regular transcriber doesn't use fast_preview
+            fast_preview: None,
             advance_cs: self.advance_cs,
         }))
     }
