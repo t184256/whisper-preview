@@ -8,6 +8,7 @@ use std::time::Instant;
 use tracing::info;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperState};
 
+const MAX_PROMPT_TOKENS: usize = 224; // half of whisper's 448-token context
 const MIN_FRAMES: u32 = 3; // do not transcribe if shorter than 3*60 = 180 ms
 const MIN_SAMPLES: usize = (MIN_FRAMES * FRAME_SIZE_SAMPLES) as usize;
 
@@ -89,12 +90,18 @@ impl Session {
             anyhow::bail!("cannot advance to {:.2}s", timestamp as f64 / 100.0);
         }
 
-        // use client-provided context segment for prompt tokens
+        // use client-provided context segment for prompt tokens (keep tail)
         self.prompt_tokens.clear();
         if let Some(segment) = context {
-            for token in &segment.tokens {
-                self.prompt_tokens.push(token.id);
-            }
+            self.prompt_tokens.extend(
+                segment
+                    .tokens
+                    .iter()
+                    .rev()
+                    .take(MAX_PROMPT_TOKENS)
+                    .rev()
+                    .map(|t| t.id),
+            );
         }
 
         self.accumulated_audio.drain(0..drop_samples);
@@ -151,8 +158,8 @@ impl Session {
         }
         if self.opts.dynamic_audio_ctx {
             // scale audio_ctx to buffer length, multiple of 64, min 384
-            let needed = (audio_f32.len() as i32 * 1500)
-                / (SAMPLE_RATE as i32 * 30);
+            let needed =
+                (audio_f32.len() as i32 * 1500) / (SAMPLE_RATE as i32 * 30);
             let aligned = ((needed + 63) / 64) * 64;
             params.set_audio_ctx(aligned.max(384));
         }
@@ -191,8 +198,8 @@ impl Session {
 
             // add advance_cs for absolute "connection" time
             let start_time = segment.start_timestamp() + self.advance_cs;
-            let end_time = (segment.end_timestamp() + self.advance_cs)
-                .min(current_end_cs);
+            let end_time =
+                (segment.end_timestamp() + self.advance_cs).min(current_end_cs);
 
             // extract token-level timing for precise merging
             let mut tokens = Vec::new();
