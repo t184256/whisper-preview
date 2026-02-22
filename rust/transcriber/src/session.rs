@@ -28,6 +28,7 @@ pub struct Session {
     prompt_tokens: Vec<c_int>, // token IDs from last transcription, for context
     advance_cs: i64, // total centiseconds advanced from the beginning
     transcribed_up_to_cs: i64, // end timestamp of the last transcription
+    advanced_since: bool,
     sampling_strategy: SamplingStrategy,
     opts: TranscribeOpts,
 }
@@ -58,6 +59,7 @@ impl Session {
             whisper_state,
             advance_cs: 0,
             transcribed_up_to_cs: 0,
+            advanced_since: 0,
             sampling_strategy,
             opts,
         })
@@ -106,6 +108,7 @@ impl Session {
 
         self.accumulated_audio.drain(0..drop_samples);
         self.advance_cs = timestamp;
+        self.advanced_since = true; // force retranscription
 
         Ok(())
     }
@@ -121,7 +124,10 @@ impl Session {
         let current_end_cs = self.advance_cs
             + (self.accumulated_audio.len() as i64 * 100) / SAMPLE_RATE as i64;
 
-        if !is_final && current_end_cs == self.transcribed_up_to_cs {
+        if !is_final
+            && !self.advanced_since
+            && current_end_cs == self.transcribed_up_to_cs
+        {
             return Ok(None); // do not re-transcribe if there's nothing new
         }
 
@@ -173,6 +179,7 @@ impl Session {
         let duration = start.elapsed().as_secs_f64();
 
         self.transcribed_up_to_cs = current_end_cs;
+        self.advanced_since = false;
 
         let audio_duration = audio_f32.len() as f64 / SAMPLE_RATE as f64;
         let realtime_factor = audio_duration / duration;
