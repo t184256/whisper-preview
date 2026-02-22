@@ -191,7 +191,7 @@ async fn handle_connection(
     // Then configure the transcription session:
     info!("Configured: language={:?}, context={:?}", language, context);
     let mut session =
-        match Session::new(&ctx, language, context, sampling_strategy, opts) {
+        match Session::new(ctx, language, context, sampling_strategy, opts) {
             Ok(s) => s,
             Err(e) => bail!(ws_sender, "error creating session: {}", e),
         };

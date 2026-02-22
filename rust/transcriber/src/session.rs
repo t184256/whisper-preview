@@ -6,7 +6,8 @@ use shared_protocol::{
 use std::ffi::c_int;
 use std::time::Instant;
 use tracing::info;
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperState};
+use std::sync::Arc;
+use whisper_rs::{FullParams, SamplingStrategy, WhisperContext};
 
 const MAX_PROMPT_TOKENS: usize = 224; // half of whisper's 448-token context
 const MIN_FRAMES: u32 = 3; // do not transcribe if shorter than 3*60 = 180 ms
@@ -24,7 +25,7 @@ pub struct Session {
     context: Option<String>,
     opus_decoder: Decoder,
     accumulated_audio: Vec<i16>,
-    whisper_state: WhisperState, // reuse state for performance
+    whisper_ctx: Arc<WhisperContext>, // create fresh state each transcription
     prompt_tokens: Vec<c_int>, // token IDs from last transcription, for context
     advance_cs: i64, // total centiseconds advanced from the beginning
     transcribed_up_to_cs: i64, // end timestamp of the last transcription
@@ -35,14 +36,13 @@ pub struct Session {
 
 impl Session {
     pub fn new(
-        ctx: &WhisperContext,
+        ctx: Arc<WhisperContext>,
         language: Option<String>,
         context: Option<String>,
         sampling_strategy: SamplingStrategy,
         opts: TranscribeOpts,
     ) -> Result<Self> {
         let opus_decoder = Decoder::new(SAMPLE_RATE, Channels::Mono)?;
-        let whisper_state = ctx.create_state()?;
 
         let language_opt = language.filter(|l| !l.is_empty() && l != "auto");
         match &language_opt {
@@ -56,7 +56,7 @@ impl Session {
             opus_decoder,
             accumulated_audio: Vec::new(),
             prompt_tokens: Vec::new(),
-            whisper_state,
+            whisper_ctx: ctx,
             advance_cs: 0,
             transcribed_up_to_cs: 0,
             advanced_since: 0,
@@ -175,7 +175,8 @@ impl Session {
         }
 
         let start = Instant::now();
-        self.whisper_state.full(params, &audio_f32)?;
+        let mut state = self.whisper_ctx.create_state()?;
+        state.full(params, &audio_f32)?;
         let duration = start.elapsed().as_secs_f64();
 
         self.transcribed_up_to_cs = current_end_cs;
@@ -190,7 +191,7 @@ impl Session {
             duration,
             realtime_factor
         );
-        let n_segments = self.whisper_state.full_n_segments();
+        let n_segments = state.full_n_segments();
 
         let mut complete = Vec::new();
         let mut incomplete = None;
@@ -199,7 +200,7 @@ impl Session {
             (self.accumulated_audio.len() as i64 * 100) / SAMPLE_RATE as i64;
 
         for i in 0..n_segments {
-            let Some(segment) = self.whisper_state.get_segment(i) else {
+            let Some(segment) = state.get_segment(i) else {
                 continue;
             };
 
