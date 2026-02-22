@@ -3,13 +3,11 @@ use opus::{Channels, Decoder};
 use shared_protocol::{
     ServerMessage, CS_SAMPLES, FRAME_SIZE_SAMPLES, SAMPLE_RATE,
 };
-use std::ffi::c_int;
 use std::time::Instant;
 use tracing::info;
 use std::sync::Arc;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext};
 
-const MAX_PROMPT_TOKENS: usize = 224; // half of whisper's 448-token context
 const MIN_FRAMES: u32 = 3; // do not transcribe if shorter than 3*60 = 180 ms
 const MIN_SAMPLES: usize = (MIN_FRAMES * FRAME_SIZE_SAMPLES) as usize;
 
@@ -26,7 +24,7 @@ pub struct Session {
     opus_decoder: Decoder,
     accumulated_audio: Vec<i16>,
     whisper_ctx: Arc<WhisperContext>, // create fresh state each transcription
-    prompt_tokens: Vec<c_int>, // token IDs from last transcription, for context
+    advance_prompt: Option<String>, // context text from last advance, used as initial_prompt
     advance_cs: i64, // total centiseconds advanced from the beginning
     transcribed_up_to_cs: i64, // end timestamp of the last transcription
     advanced_since: bool,
@@ -55,7 +53,7 @@ impl Session {
             context,
             opus_decoder,
             accumulated_audio: Vec::new(),
-            prompt_tokens: Vec::new(),
+            advance_prompt: None,
             whisper_ctx: ctx,
             advance_cs: 0,
             transcribed_up_to_cs: 0,
@@ -92,19 +90,8 @@ impl Session {
             anyhow::bail!("cannot advance to {:.2}s", timestamp as f64 / 100.0);
         }
 
-        // use client-provided context segment for prompt tokens (keep tail)
-        self.prompt_tokens.clear();
-        if let Some(segment) = context {
-            self.prompt_tokens.extend(
-                segment
-                    .tokens
-                    .iter()
-                    .rev()
-                    .take(MAX_PROMPT_TOKENS)
-                    .rev()
-                    .map(|t| t.id),
-            );
-        }
+        // use client-provided context segment text as initial_prompt
+        self.advance_prompt = context.map(|s| s.text);
 
         self.accumulated_audio.drain(0..drop_samples);
         self.advance_cs = timestamp;
@@ -147,14 +134,13 @@ impl Session {
 
         let mut params = FullParams::new(self.sampling_strategy.clone());
         params.set_language(self.language.as_deref()); // None = auto-detect
-        params.set_suppress_nst(true);
+        params.set_suppress_nst(false);
         params.set_max_tokens(0);
         params.set_max_initial_ts(0.);
-        params.set_print_progress(false);
-        params.set_print_special(false);
-        params.set_print_realtime(false);
+        params.set_print_progress(true);
+        params.set_print_special(true);
+        params.set_print_realtime(true);
         params.set_token_timestamps(true); // token-level timing
-        params.set_tokens(&self.prompt_tokens);
 
         if let Some(v) = self.opts.temperature_inc {
             params.set_temperature_inc(v);
@@ -170,7 +156,8 @@ impl Session {
             params.set_audio_ctx(aligned.max(384));
         }
 
-        if let Some(ref prompt) = self.context {
+        let prompt = self.advance_prompt.as_ref().or(self.context.as_ref());
+        if let Some(prompt) = prompt {
             params.set_initial_prompt(prompt);
         }
 
