@@ -14,9 +14,10 @@ pub struct Session {
     language: Option<String>, // None = auto-detect
     context: Option<String>,
     opus_decoder: Decoder,
+    prev_audio: Vec<i16>, // context from previous advance, prepended to input
     accumulated_audio: Vec<i16>,
     whisper_state: WhisperState, // reuse state for performance
-    advance_cs: i64, // total centiseconds dropped from the beginning
+    advance_cs: i64, // total centiseconds advanced from the beginning
     transcribed_up_to_cs: i64, // end timestamp of the last transcription
     sampling_strategy: SamplingStrategy,
 }
@@ -41,6 +42,7 @@ impl Session {
             language: language_opt,
             context,
             opus_decoder,
+            prev_audio: Vec::new(),
             accumulated_audio: Vec::new(),
             whisper_state,
             advance_cs: 0,
@@ -62,7 +64,7 @@ impl Session {
 
     pub fn advance(&mut self, timestamp: i64) -> Result<()> {
         if timestamp <= self.advance_cs {
-            return Ok(()); // already dropped past this point
+            return Ok(()); // already advanced past this point
         }
 
         let drop_cs = timestamp - self.advance_cs;
@@ -72,10 +74,10 @@ impl Session {
             anyhow::bail!("cannot advance to {:.2}s", timestamp as f64 / 100.0);
         }
 
-        if drop_samples > 0 {
-            self.accumulated_audio.drain(0..drop_samples);
-            self.advance_cs = timestamp;
-        }
+        // save the drained portion as context for the next transcription
+        self.prev_audio =
+            self.accumulated_audio.drain(0..drop_samples).collect();
+        self.advance_cs = timestamp;
 
         Ok(())
     }
@@ -103,9 +105,14 @@ impl Session {
             );
         }
 
+        // prepend prev_audio as context for whisper
+        let prev_cs = (self.prev_audio.len() as i64 * 100) / SAMPLE_RATE as i64;
+        let whisper_start_cs = self.advance_cs - prev_cs;
+
         let audio_f32: Vec<f32> = self
-            .accumulated_audio
+            .prev_audio
             .iter()
+            .chain(self.accumulated_audio.iter())
             .map(|&s| s as f32 / 32768.0)
             .collect();
 
@@ -127,13 +134,13 @@ impl Session {
 
         self.transcribed_up_to_cs = current_end_cs;
 
-        let audio_duration =
-            self.accumulated_audio.len() as f64 / SAMPLE_RATE as f64;
+        let audio_duration = audio_f32.len() as f64 / SAMPLE_RATE as f64;
         let realtime_factor = audio_duration / duration;
         info!(
-            "transcribing range={:.2}s-{:.2}s took {:.2}s at {:.2}x",
-            self.advance_cs as f64 / 100.,
+            "transcribing {:.2}s-{:.2}s (+{:.2}s ctx) took {:.2}s at {:.2}x",
+            whisper_start_cs as f64 / 100.,
             current_end_cs as f64 / 100.,
+            prev_cs as f64 / 100.,
             duration,
             realtime_factor
         );
@@ -142,20 +149,29 @@ impl Session {
         let mut complete = Vec::new();
         let mut incomplete = None;
 
+        let total_len_cs = (audio_f32.len() as i64 * 100) / SAMPLE_RATE as i64;
+
         for i in 0..n_segments {
             let Some(segment) = self.whisper_state.get_segment(i) else {
                 continue;
             };
 
-            // add advance_cs for absolute "connection" time
-            let start_time = segment.start_timestamp() + self.advance_cs;
-            let end_time = (segment.end_timestamp() + self.advance_cs)
+            // add whisper_start_cs = advance_cs - prev_cs
+            // for absolute "connection" time
+            let end_time = (segment.end_timestamp() + whisper_start_cs)
                 .min(current_end_cs);
+
+            // skip segments entirely within the context region
+            if end_time <= self.advance_cs {
+                continue;
+            }
+
+            let start_time = (segment.start_timestamp() + whisper_start_cs)
+                .max(self.advance_cs);
 
             // extract token-level timing for precise merging
             let mut tokens = Vec::new();
             let n_tokens = segment.n_tokens();
-            let buffer_len_cs = (self.accumulated_audio.len() as i64 * 100) / SAMPLE_RATE as i64;
             for j in 0..n_tokens {
                 if let Some(token) = segment.get_token(j) {
                     let token_text = token.to_str_lossy()?.to_string();
@@ -165,14 +181,19 @@ impl Session {
                     }
                     let token_data = token.token_data();
                     // do not trust tokens beyond the actual audio
-                    if token_data.t0 >= buffer_len_cs {
+                    if token_data.t0 >= total_len_cs {
                         continue;
                     }
-                    // token timestamps are relative to buffer start
+                    let abs_end = token_data.t1 + whisper_start_cs;
+                    // filter out tokens belonging to the context region
+                    if abs_end <= self.advance_cs {
+                        continue;
+                    }
                     tokens.push(shared_protocol::Token {
                         text: token_text,
-                        start_cs: token_data.t0 + self.advance_cs,
-                        end_cs: token_data.t1 + self.advance_cs,
+                        start_cs: (token_data.t0 + whisper_start_cs)
+                            .max(self.advance_cs),
+                        end_cs: abs_end,
                     });
                 }
             }
