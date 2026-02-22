@@ -10,6 +10,13 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperState};
 const MIN_FRAMES: u32 = 3; // do not transcribe if shorter than 3*60 = 180 ms
 const MIN_SAMPLES: usize = (MIN_FRAMES * FRAME_SIZE_SAMPLES) as usize;
 
+#[derive(Clone, Debug)]
+pub struct TranscribeOpts {
+    pub dynamic_audio_ctx: bool,
+    pub temperature_inc: Option<f32>,
+    pub entropy_thold: Option<f32>,
+}
+
 pub struct Session {
     language: Option<String>, // None = auto-detect
     context: Option<String>,
@@ -19,6 +26,7 @@ pub struct Session {
     advance_cs: i64, // total centiseconds dropped from the beginning
     transcribed_up_to_cs: i64, // end timestamp of the last transcription
     sampling_strategy: SamplingStrategy,
+    opts: TranscribeOpts,
 }
 
 impl Session {
@@ -27,6 +35,7 @@ impl Session {
         language: Option<String>,
         context: Option<String>,
         sampling_strategy: SamplingStrategy,
+        opts: TranscribeOpts,
     ) -> Result<Self> {
         let opus_decoder = Decoder::new(SAMPLE_RATE, Channels::Mono)?;
         let whisper_state = ctx.create_state()?;
@@ -46,6 +55,7 @@ impl Session {
             advance_cs: 0,
             transcribed_up_to_cs: 0,
             sampling_strategy,
+            opts,
         })
     }
 
@@ -116,6 +126,20 @@ impl Session {
         params.set_print_special(false);
         params.set_print_realtime(false);
         params.set_token_timestamps(true); // token-level timing
+
+        if let Some(v) = self.opts.temperature_inc {
+            params.set_temperature_inc(v);
+        }
+        if let Some(v) = self.opts.entropy_thold {
+            params.set_entropy_thold(v);
+        }
+        if self.opts.dynamic_audio_ctx {
+            // scale audio_ctx to buffer length, multiple of 64, min 384
+            let needed = (audio_f32.len() as i32 * 1500)
+                / (SAMPLE_RATE as i32 * 30);
+            let aligned = ((needed + 63) / 64) * 64;
+            params.set_audio_ctx(aligned.max(384));
+        }
 
         if let Some(ref prompt) = self.context {
             params.set_initial_prompt(prompt);

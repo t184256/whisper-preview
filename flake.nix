@@ -78,6 +78,24 @@
                 description = "Group to run the service as";
               };
 
+              dynamicAudioCtx = lib.mkOption {
+                type = lib.types.bool;
+                default = false;
+                description = "Scale audio context to buffer length (faster for short audio)";
+              };
+
+              temperatureInc = lib.mkOption {
+                type = lib.types.nullOr lib.types.float;
+                default = null;
+                description = "Temperature increment on decode failure (0 = no retries, whisper default: 0.2)";
+              };
+
+              entropyThold = lib.mkOption {
+                type = lib.types.nullOr lib.types.float;
+                default = null;
+                description = "Entropy threshold for decode retry (whisper default: 2.4)";
+              };
+
               enableGpu = lib.mkOption {
                 type = lib.types.bool;
                 default = false;
@@ -150,6 +168,15 @@
                     ]
                     ++ lib.optionals (instanceCfg.bestOf != null && instanceCfg.beamSize == null) [
                       "--best-of" (toString instanceCfg.bestOf)
+                    ]
+                    ++ lib.optionals instanceCfg.dynamicAudioCtx [
+                      "--dynamic-audio-ctx"
+                    ]
+                    ++ lib.optionals (instanceCfg.temperatureInc != null) [
+                      "--temperature-inc" (toString instanceCfg.temperatureInc)
+                    ]
+                    ++ lib.optionals (instanceCfg.entropyThold != null) [
+                      "--entropy-thold" (toString instanceCfg.entropyThold)
                     ];
                   in lib.escapeShellArgs args;
 

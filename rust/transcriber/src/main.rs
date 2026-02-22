@@ -3,7 +3,7 @@ mod session;
 use anyhow::Result;
 use clap::Parser;
 use futures_util::{FutureExt, SinkExt, StreamExt};
-use session::Session;
+use session::{Session, TranscribeOpts};
 use shared_protocol::{ClientMessage, ServerMessage};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -40,6 +40,21 @@ struct Args {
         conflicts_with = "best_of"
     )]
     beam_size: Option<i32>,
+
+    #[arg(
+        long,
+        help = "Scale audio_ctx to buffer length (faster for short chunks)"
+    )]
+    dynamic_audio_ctx: bool,
+
+    #[arg(
+        long,
+        help = "Temp increment on decode retry (0 = no retry, default: 0.2)"
+    )]
+    temperature_inc: Option<f32>,
+
+    #[arg(long, help = "Entropy threshold for decode retry (default: 2.4)")]
+    entropy_thold: Option<f32>,
 }
 
 #[tokio::main]
@@ -99,6 +114,12 @@ async fn main() -> Result<()> {
         }
     };
 
+    let transcribe_opts = TranscribeOpts {
+        dynamic_audio_ctx: args.dynamic_audio_ctx,
+        temperature_inc: args.temperature_inc,
+        entropy_thold: args.entropy_thold,
+    };
+
     info!("Listening on {}", addr);
     let listener = TcpListener::bind(addr).await?;
     while let Ok((stream, peer_addr)) = listener.accept().await {
@@ -106,9 +127,10 @@ async fn main() -> Result<()> {
         let ctx = ctx.clone();
         let exp_token = expected_token.clone();
         let strategy = sampling_strategy.clone();
+        let opts = transcribe_opts.clone();
         tokio::spawn(async move {
             if let Err(e) =
-                handle_connection(stream, ctx, exp_token, strategy).await
+                handle_connection(stream, ctx, exp_token, strategy, opts).await
             {
                 error!("Connection error: {}", e);
             }
@@ -133,6 +155,7 @@ async fn handle_connection(
     ctx: Arc<WhisperContext>,
     expected_token: Option<String>,
     sampling_strategy: SamplingStrategy,
+    opts: TranscribeOpts,
 ) -> Result<()> {
     let ws_stream = tokio_tungstenite::accept_async(stream).await?;
     let (mut ws_sender, ws_receiver) = ws_stream.split();
@@ -168,7 +191,7 @@ async fn handle_connection(
     // Then configure the transcription session:
     info!("Configured: language={:?}, context={:?}", language, context);
     let mut session =
-        match Session::new(&ctx, language, context, sampling_strategy) {
+        match Session::new(&ctx, language, context, sampling_strategy, opts) {
             Ok(s) => s,
             Err(e) => bail!(ws_sender, "error creating session: {}", e),
         };
