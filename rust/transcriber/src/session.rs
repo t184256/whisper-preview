@@ -25,6 +25,7 @@ pub struct Session {
     whisper_state: WhisperState, // reuse state for performance
     advance_cs: i64, // total centiseconds dropped from the beginning
     transcribed_up_to_cs: i64, // end timestamp of the last transcription
+    advanced_since: bool,
     sampling_strategy: SamplingStrategy,
     opts: TranscribeOpts,
 }
@@ -54,6 +55,7 @@ impl Session {
             whisper_state,
             advance_cs: 0,
             transcribed_up_to_cs: 0,
+            advanced_since: false,
             sampling_strategy,
             opts,
         })
@@ -85,6 +87,7 @@ impl Session {
         if drop_samples > 0 {
             self.accumulated_audio.drain(0..drop_samples);
             self.advance_cs = timestamp;
+            self.advanced_since = true; // force retranscription
         }
 
         Ok(())
@@ -101,7 +104,10 @@ impl Session {
         let current_end_cs = self.advance_cs
             + (self.accumulated_audio.len() as i64 * 100) / SAMPLE_RATE as i64;
 
-        if !is_final && current_end_cs == self.transcribed_up_to_cs {
+        if !is_final
+            && !self.advanced_since
+            && current_end_cs == self.transcribed_up_to_cs
+        {
             return Ok(None); // do not re-transcribe if there's nothing new
         }
 
@@ -150,6 +156,7 @@ impl Session {
         let duration = start.elapsed().as_secs_f64();
 
         self.transcribed_up_to_cs = current_end_cs;
+        self.advanced_since = false;
 
         let audio_duration =
             self.accumulated_audio.len() as f64 / SAMPLE_RATE as f64;
