@@ -192,6 +192,8 @@
 
                   RuntimeDirectory = "whisper-transcriber-${name}";
                   RuntimeDirectoryMode = "0700";
+                  CacheDirectory = "whisper-transcriber-${name}";
+                  Environment = "HOME=/var/cache/whisper-transcriber-${name}";
 
                   # Security hardening (based on wyoming/faster-whisper.nix)
                   CapabilityBoundingSet = "";
