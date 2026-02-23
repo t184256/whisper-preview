@@ -8,6 +8,7 @@ name = "whisper-preview"
 resolver = "3"
 members = [
     "shared-protocol",
+    "shared-vad",
     "transcriber",
 ]
 
