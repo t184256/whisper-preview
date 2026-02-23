@@ -34,6 +34,7 @@ pub struct Segment {
     pub tokens: Vec<Token>,
     pub start_cs: i64,
     pub end_cs: i64,
+    pub fallback_segmentation: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

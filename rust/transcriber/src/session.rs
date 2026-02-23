@@ -219,11 +219,13 @@ impl Session {
                 .trim()
                 .to_string();
 
+            let fallback_segmentation = (end_time - start_time) % 100 == 0;
             let segment = shared_protocol::Segment {
                 text: segment_text,
                 tokens,
                 start_cs: start_time,
                 end_cs: end_time,
+                fallback_segmentation,
             };
 
             if i < n_segments - 1 {
