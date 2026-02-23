@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 shared-protocol = { path = "../shared-protocol" }
+shared-vad = { path = "../shared-vad" }
 tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }

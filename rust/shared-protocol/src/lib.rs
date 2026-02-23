@@ -31,10 +31,11 @@ pub struct Token {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Segment {
     pub text: String,
-    pub tokens: Vec<Token>,
     pub start_cs: i64,
     pub end_cs: i64,
+    pub tokens: Vec<Token>,
     pub fallback_segmentation: bool,
+    pub end_vad_probability: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

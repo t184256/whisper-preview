@@ -3,6 +3,7 @@ use opus::{Channels, Decoder};
 use shared_protocol::{
     ServerMessage, CS_SAMPLES, FRAME_SIZE_SAMPLES, SAMPLE_RATE,
 };
+use shared_vad::Vad;
 use std::time::Instant;
 use tracing::info;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperState};
@@ -23,6 +24,7 @@ pub struct Session {
     opus_decoder: Decoder,
     accumulated_audio: Vec<i16>,
     whisper_state: WhisperState, // reuse state for performance
+    vad: Vad,
     advance_cs: i64, // total centiseconds dropped from the beginning
     transcribed_up_to_cs: i64, // end timestamp of the last transcription
     advanced_since: bool,
@@ -53,6 +55,7 @@ impl Session {
             opus_decoder,
             accumulated_audio: Vec::new(),
             whisper_state,
+            vad: Vad::new(),
             advance_cs: 0,
             transcribed_up_to_cs: 0,
             advanced_since: false,
@@ -69,6 +72,7 @@ impl Session {
             anyhow::bail!("decompressed to unexpected len {}", samples_decoded);
         }
         self.accumulated_audio.extend(&output); // see advance for draining
+        self.vad.consume(&output);
         Ok(())
     }
 
@@ -88,6 +92,8 @@ impl Session {
             self.accumulated_audio.drain(0..drop_samples);
             self.advance_cs = timestamp;
             self.advanced_since = true; // force retranscription
+            self.vad.reset(); // and recalculate VAD from remaining audio
+            self.vad.consume(&self.accumulated_audio);
         }
 
         Ok(())
@@ -141,8 +147,8 @@ impl Session {
         }
         if self.opts.dynamic_audio_ctx {
             // scale audio_ctx to buffer length, multiple of 64, min 384
-            let needed = (audio_f32.len() as i32 * 1500)
-                / (SAMPLE_RATE as i32 * 30);
+            let needed =
+                (audio_f32.len() as i32 * 1500) / (SAMPLE_RATE as i32 * 30);
             let aligned = ((needed + 63) / 64) * 64;
             params.set_audio_ctx(aligned.max(384));
         }
@@ -180,13 +186,12 @@ impl Session {
 
             // add advance_cs for absolute "connection" time
             let start_time = segment.start_timestamp() + self.advance_cs;
-            let end_time = (segment.end_timestamp() + self.advance_cs)
-                .min(current_end_cs);
 
             // extract token-level timing for precise merging
             let mut tokens = Vec::new();
             let n_tokens = segment.n_tokens();
-            let buffer_len_cs = (self.accumulated_audio.len() as i64 * 100) / SAMPLE_RATE as i64;
+            let buffer_len_cs = (self.accumulated_audio.len() as i64 * 100)
+                / SAMPLE_RATE as i64;
             for j in 0..n_tokens {
                 if let Some(token) = segment.get_token(j) {
                     let token_text = token.to_str_lossy()?.to_string();
@@ -218,14 +223,20 @@ impl Session {
                 .collect::<String>()
                 .trim()
                 .to_string();
+            let end_time =
+                (segment.end_timestamp() + self.advance_cs).min(current_end_cs);
 
             let fallback_segmentation = (end_time - start_time) % 100 == 0;
+            let end_vad_probability =
+                self.vad.probability_at_cs(end_time - self.advance_cs);
+
             let segment = shared_protocol::Segment {
                 text: segment_text,
-                tokens,
                 start_cs: start_time,
                 end_cs: end_time,
+                tokens,
                 fallback_segmentation,
+                end_vad_probability,
             };
 
             if i < n_segments - 1 {
