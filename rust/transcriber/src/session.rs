@@ -213,10 +213,6 @@ impl Session {
             for j in 0..n_tokens {
                 if let Some(token) = segment.get_token(j) {
                     let token_text = token.to_str_lossy()?.to_string();
-                    // skip special tokens ([_TT_NNN], [_BEG_], [_SOT_], etc.)
-                    if token_text.starts_with("[_") {
-                        continue;
-                    }
                     let token_data = token.token_data();
                     // do not trust tokens beyond the actual audio
                     if token_data.t0 >= buffer_len_cs {
@@ -228,6 +224,7 @@ impl Session {
                         id: token.token_id(),
                         start_cs: token_data.t0 + self.advance_cs,
                         end_cs: token_data.t1 + self.advance_cs,
+                        probability: token.token_probability(),
                     });
                 }
             }
@@ -248,6 +245,7 @@ impl Session {
             let fallback_segmentation = (end_time - start_time) % 100 == 0;
             let end_vad_probability =
                 self.vad.probability_at_cs(end_time - self.advance_cs);
+            let no_speech_probability = segment.no_speech_probability();
 
             let segment = shared_protocol::Segment {
                 text: segment_text,
@@ -256,6 +254,7 @@ impl Session {
                 tokens,
                 fallback_segmentation,
                 end_vad_probability,
+                no_speech_probability,
             };
 
             if i < n_segments - 1 {

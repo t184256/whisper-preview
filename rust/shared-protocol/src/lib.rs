@@ -28,6 +28,7 @@ pub struct Token {
     pub id: i32, // whisper token ID, needed for prompt context
     pub start_cs: i64,
     pub end_cs: i64,
+    pub probability: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,6 +39,7 @@ pub struct Segment {
     pub tokens: Vec<Token>,
     pub fallback_segmentation: bool,
     pub end_vad_probability: f32,
+    pub no_speech_probability: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
