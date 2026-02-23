@@ -1,7 +1,7 @@
 use anyhow::Result;
 use opus::{Channels, Decoder};
 use shared_protocol::{
-    ServerMessage, CS_SAMPLES, FRAME_SIZE_SAMPLES, SAMPLE_RATE,
+    CS_SAMPLES, FRAME_SIZE_SAMPLES, SAMPLE_RATE, ServerMessage,
 };
 use shared_vad::Vad;
 use std::ffi::c_int;
@@ -33,6 +33,8 @@ pub struct Session {
     advanced_since: bool,
     sampling_strategy: SamplingStrategy,
     opts: TranscribeOpts,
+    max_len: i32,
+    max_tokens: i32,
 }
 
 impl Session {
@@ -40,6 +42,8 @@ impl Session {
         ctx: &WhisperContext,
         language: Option<String>,
         context: Option<String>,
+        max_len: Option<i32>,
+        max_tokens: Option<i32>,
         sampling_strategy: SamplingStrategy,
         opts: TranscribeOpts,
     ) -> Result<Self> {
@@ -65,6 +69,8 @@ impl Session {
             advanced_since: false,
             sampling_strategy,
             opts,
+            max_len: max_len.unwrap_or(0),
+            max_tokens: max_tokens.unwrap_or(0),
         })
     }
 
@@ -148,7 +154,8 @@ impl Session {
         let mut params = FullParams::new(self.sampling_strategy.clone());
         params.set_language(self.language.as_deref()); // None = auto-detect
         params.set_suppress_nst(true);
-        params.set_max_tokens(0);
+        params.set_max_len(self.max_len);
+        params.set_max_tokens(self.max_tokens);
         params.set_max_initial_ts(0.);
         params.set_print_progress(false);
         params.set_print_special(false);

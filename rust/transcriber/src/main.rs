@@ -32,7 +32,6 @@ struct Args {
         help = "Best-of (default: 1, mutually exclusive with --beam-size)",
         conflicts_with = "beam_size"
     )]
-
     best_of: Option<i32>,
     #[arg(
         long,
@@ -163,14 +162,20 @@ async fn handle_connection(
     futures_util::pin_mut!(ws_receiver);
 
     // First wait for the mandatory Configure message:
-    let (token, language, context) = match ws_receiver.as_mut().next().await {
+    let (token, language, context, max_len, max_tokens) = match ws_receiver
+        .as_mut()
+        .next()
+        .await
+    {
         Some(Ok(Message::Text(text))) => {
             match serde_json::from_str::<ClientMessage>(&text) {
                 Ok(ClientMessage::Configure {
                     token,
                     language,
                     context,
-                }) => (token, language, context),
+                    max_len,
+                    max_tokens,
+                }) => (token, language, context, max_len, max_tokens),
                 Ok(_) => bail!(ws_sender, "first message must be Configure"),
                 Err(e) => bail!(ws_sender, "failed to parse Configure : {}", e),
             }
@@ -190,11 +195,18 @@ async fn handle_connection(
     }
     // Then configure the transcription session:
     info!("Configured: language={:?}, context={:?}", language, context);
-    let mut session =
-        match Session::new(&ctx, language, context, sampling_strategy, opts) {
-            Ok(s) => s,
-            Err(e) => bail!(ws_sender, "error creating session: {}", e),
-        };
+    let mut session = match Session::new(
+        &ctx,
+        language,
+        context,
+        max_len,
+        max_tokens,
+        sampling_strategy,
+        opts,
+    ) {
+        Ok(s) => s,
+        Err(e) => bail!(ws_sender, "error creating session: {}", e),
+    };
 
     // Finally, enter the normal drain-transcribe loop:
     let mut finalized = false;

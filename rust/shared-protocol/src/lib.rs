@@ -13,6 +13,8 @@ pub enum ClientMessage {
         token: Option<String>,    // optional auth token
         language: Option<String>, // defaults to "auto"
         context: Option<String>,  // extra context for transcription
+        max_len: Option<i32>, // max segment length in chars (0 = unlimited)
+        max_tokens: Option<i32>, // max tokens per segment (0 = unlimited)
     },
     // no explicit AudioChunk message - binary frames are implicitly audio
     Advance {
