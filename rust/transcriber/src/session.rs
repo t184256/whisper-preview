@@ -155,6 +155,7 @@ impl Session {
         params.set_print_realtime(false);
         params.set_token_timestamps(true); // token-level timing
         params.set_tokens(&self.prompt_tokens);
+        params.set_no_context(true);
 
         if let Some(v) = self.opts.temperature_inc {
             params.set_temperature_inc(v);
