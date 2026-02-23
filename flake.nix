@@ -96,6 +96,12 @@
                 description = "Entropy threshold for decode retry (whisper default: 2.4)";
               };
 
+              reinitState = lib.mkOption {
+                type = lib.types.bool;
+                default = false;
+                description = "Reinitialize whisper state before every transcription (slower but avoids stale state)";
+              };
+
               enableGpu = lib.mkOption {
                 type = lib.types.bool;
                 default = false;
@@ -177,6 +183,9 @@
                     ]
                     ++ lib.optionals (instanceCfg.entropyThold != null) [
                       "--entropy-thold" (toString instanceCfg.entropyThold)
+                    ]
+                    ++ lib.optionals instanceCfg.reinitState [
+                      "--reinit-state"
                     ];
                   in lib.escapeShellArgs args;
 

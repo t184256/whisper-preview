@@ -7,6 +7,7 @@ use shared_vad::Vad;
 use std::ffi::c_int;
 use std::time::Instant;
 use tracing::info;
+use std::sync::Arc;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperState};
 
 const MAX_PROMPT_TOKENS: usize = 224; // half of whisper's 448-token context
@@ -18,9 +19,11 @@ pub struct TranscribeOpts {
     pub dynamic_audio_ctx: bool,
     pub temperature_inc: Option<f32>,
     pub entropy_thold: Option<f32>,
+    pub reinit_state: bool,
 }
 
 pub struct Session {
+    ctx: Arc<WhisperContext>,
     language: Option<String>, // None = auto-detect
     context: Option<String>,
     opus_decoder: Decoder,
@@ -39,7 +42,7 @@ pub struct Session {
 
 impl Session {
     pub fn new(
-        ctx: &WhisperContext,
+        ctx: Arc<WhisperContext>,
         language: Option<String>,
         context: Option<String>,
         max_len: Option<i32>,
@@ -57,6 +60,7 @@ impl Session {
         }
 
         Ok(Self {
+            ctx,
             language: language_opt,
             context,
             opus_decoder,
@@ -180,6 +184,10 @@ impl Session {
 
         if let Some(ref prompt) = self.context {
             params.set_initial_prompt(prompt);
+        }
+
+        if self.opts.reinit_state {
+            self.whisper_state = self.ctx.create_state()?;
         }
 
         let start = Instant::now();

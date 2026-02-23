@@ -54,6 +54,9 @@ struct Args {
 
     #[arg(long, help = "Entropy threshold for decode retry (default: 2.4)")]
     entropy_thold: Option<f32>,
+
+    #[arg(long, help = "Reinitialize whisper state before every transcription")]
+    reinit_state: bool,
 }
 
 #[tokio::main]
@@ -117,6 +120,7 @@ async fn main() -> Result<()> {
         dynamic_audio_ctx: args.dynamic_audio_ctx,
         temperature_inc: args.temperature_inc,
         entropy_thold: args.entropy_thold,
+        reinit_state: args.reinit_state,
     };
 
     info!("Listening on {}", addr);
@@ -196,7 +200,7 @@ async fn handle_connection(
     // Then configure the transcription session:
     info!("Configured: language={:?}, context={:?}", language, context);
     let mut session = match Session::new(
-        &ctx,
+        ctx,
         language,
         context,
         max_len,
