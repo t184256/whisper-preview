@@ -369,6 +369,12 @@ async fn handle_connection(
                             // Drain again to pick up any audio that arrived during transcription
                             drain!(ws_receiver, ws_sender, session, finalized);
 
+                            // If EOS arrived during transcription, skip the
+                            // suggestion pass — loop back for a finalized transcription
+                            if finalized {
+                                continue;
+                            }
+
                             match session.transcribe_from(retranscribe_from_cs, finalized) {
                                 Ok(retranscribed_segments) => {
                                     let (exact_match, n_matching_tokens) =
