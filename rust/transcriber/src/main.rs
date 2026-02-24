@@ -177,6 +177,7 @@ async fn handle_connection(
         max_tokens,
         single_segment,
         max_initial_ts,
+        no_preview,
     ) = match ws_receiver.as_mut().next().await {
         Some(Ok(Message::Text(text))) => {
             match serde_json::from_str::<ClientMessage>(&text) {
@@ -188,6 +189,7 @@ async fn handle_connection(
                     max_tokens,
                     single_segment,
                     max_initial_ts,
+                    no_preview,
                 }) => (
                     token,
                     language,
@@ -196,6 +198,7 @@ async fn handle_connection(
                     max_tokens,
                     single_segment,
                     max_initial_ts,
+                    no_preview,
                 ),
                 Ok(_) => bail!(ws_sender, "first message must be Configure"),
                 Err(e) => bail!(ws_sender, "failed to parse Configure : {}", e),
@@ -284,6 +287,10 @@ async fn handle_connection(
             }
         }
         // transcribe
+        if no_preview.unwrap_or(false) && !finalized {
+            ws_receiver.as_mut().peek().await;
+            continue;
+        }
         match session.transcribe(finalized) {
             Ok(Some(msg)) => {
                 let json = serde_json::to_string(&msg)?;

@@ -17,6 +17,7 @@ pub enum ClientMessage {
         max_tokens: Option<i32>, // max tokens per segment (0 = unlimited)
         single_segment: Option<bool>, // force single segment output
         max_initial_ts: Option<f32>, // max timestamp for first segment start (seconds)
+        no_preview: Option<bool>, // only transcribe after EndOfStream
     },
     // no explicit AudioChunk message - binary frames are implicitly audio
     Advance {
