@@ -129,6 +129,7 @@ async fn main() -> Result<()> {
     info!("Listening on {}", addr);
     let listener = TcpListener::bind(addr).await?;
     while let Ok((stream, peer_addr)) = listener.accept().await {
+        stream.set_nodelay(true)?;
         info!("Connection from {}", peer_addr);
         let ctx = ctx.clone();
         let exp_token = expected_token.clone();
