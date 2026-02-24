@@ -1,0 +1,8 @@
+run whisper in a separate thread
+opus decoding in a separate thread
+read segment data from callbacks ASAP
+make whisper run cancellable with a callback
+simpler protocol?
+explicit "go" message in the protocol to start transcription instead of sending?
+actual cascading
+DTW-less cascading
