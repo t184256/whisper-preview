@@ -31,7 +31,8 @@ pub enum ClientMessage {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Token {
     pub text: String,
-    pub id: i32, // whisper token ID, needed for prompt context
+    pub id: i32,          // whisper token ID, needed for prompt context
+    pub special: bool,    // true for eot/sot/timestamp/language/etc tokens
     pub start_cs: i64,
     pub end_cs: i64,
     pub probability: f32,

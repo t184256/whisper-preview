@@ -216,6 +216,7 @@ impl Session {
         );
 
         let n_segments = self.whisper_state.full_n_segments();
+        let eot_id = self.ctx.token_eot();
 
         let mut complete = Vec::new();
         let mut incomplete = None;
@@ -245,6 +246,7 @@ impl Session {
                     tokens.push(shared_protocol::Token {
                         text: token_text,
                         id: token.token_id(),
+                        special: token.token_id() >= eot_id,
                         start_cs: token_data.t0 + self.advance_cs,
                         end_cs: token_data.t1 + self.advance_cs,
                         probability: token.token_probability(),
@@ -364,6 +366,7 @@ impl Session {
         );
 
         let n_segments = self.whisper_state.full_n_segments();
+        let eot_id = self.ctx.token_eot();
         let buffer_len_cs =
             (audio_slice.len() as i64 * 100) / SAMPLE_RATE as i64;
         let mut segments = Vec::new();
@@ -386,6 +389,7 @@ impl Session {
                     tokens.push(shared_protocol::Token {
                         text: token_text,
                         id: token.token_id(),
+                        special: token.token_id() >= eot_id,
                         start_cs: token_data.t0 + from_cs,
                         end_cs: token_data.t1 + from_cs,
                         probability: token.token_probability(),

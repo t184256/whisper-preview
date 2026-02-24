@@ -175,15 +175,17 @@ fn compare_segments(
     let first_norm = normalize_for_comparison(first.text.trim());
     let exact_match = !orig_norm.is_empty() && orig_norm == first_norm;
 
-    // Count matching leading tokens (case/punctuation insensitive)
+    // Count matching leading non-special tokens (case/punctuation insensitive)
     let orig_tokens: Vec<String> = original
         .tokens
         .iter()
+        .filter(|t| !t.special)
         .map(|t| normalize_for_comparison(&t.text))
         .collect();
     let new_tokens: Vec<String> = retranscribed
         .iter()
         .flat_map(|s| s.tokens.iter())
+        .filter(|t| !t.special)
         .map(|t| normalize_for_comparison(&t.text))
         .collect();
     let n_matching_tokens = orig_tokens
