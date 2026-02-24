@@ -10,11 +10,13 @@ pub const FRAME_SIZE_SAMPLES: u32 = FRAME_SIZE_CS * CS_SAMPLES; // 960
 pub enum ClientMessage {
     Configure {
         // sent once after connection,required
-        token: Option<String>,    // optional auth token
-        language: Option<String>, // defaults to "auto"
-        context: Option<String>,  // extra context for transcription
+        token: Option<String>,        // optional auth token
+        language: Option<String>,     // defaults to "auto"
+        context: Option<String>,      // extra context for transcription
         max_len: Option<i32>, // max segment length in chars (0 = unlimited)
         max_tokens: Option<i32>, // max tokens per segment (0 = unlimited)
+        single_segment: Option<bool>, // force single segment output
+        max_initial_ts: Option<f32>, // max timestamp for first segment start (seconds)
     },
     // no explicit AudioChunk message - binary frames are implicitly audio
     Advance {

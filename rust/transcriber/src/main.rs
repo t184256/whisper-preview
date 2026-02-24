@@ -55,7 +55,10 @@ struct Args {
     #[arg(long, help = "Entropy threshold for decode retry (default: 2.4)")]
     entropy_thold: Option<f32>,
 
-    #[arg(long, help = "Reinitialize whisper state before every transcription")]
+    #[arg(
+        long,
+        help = "Reinitialize whisper state before every transcription"
+    )]
     reinit_state: bool,
 }
 
@@ -166,11 +169,15 @@ async fn handle_connection(
     futures_util::pin_mut!(ws_receiver);
 
     // First wait for the mandatory Configure message:
-    let (token, language, context, max_len, max_tokens) = match ws_receiver
-        .as_mut()
-        .next()
-        .await
-    {
+    let (
+        token,
+        language,
+        context,
+        max_len,
+        max_tokens,
+        single_segment,
+        max_initial_ts,
+    ) = match ws_receiver.as_mut().next().await {
         Some(Ok(Message::Text(text))) => {
             match serde_json::from_str::<ClientMessage>(&text) {
                 Ok(ClientMessage::Configure {
@@ -179,7 +186,17 @@ async fn handle_connection(
                     context,
                     max_len,
                     max_tokens,
-                }) => (token, language, context, max_len, max_tokens),
+                    single_segment,
+                    max_initial_ts,
+                }) => (
+                    token,
+                    language,
+                    context,
+                    max_len,
+                    max_tokens,
+                    single_segment,
+                    max_initial_ts,
+                ),
                 Ok(_) => bail!(ws_sender, "first message must be Configure"),
                 Err(e) => bail!(ws_sender, "failed to parse Configure : {}", e),
             }
@@ -205,6 +222,8 @@ async fn handle_connection(
         context,
         max_len,
         max_tokens,
+        single_segment,
+        max_initial_ts,
         sampling_strategy,
         opts,
     ) {

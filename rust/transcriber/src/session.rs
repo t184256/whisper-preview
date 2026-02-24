@@ -5,9 +5,9 @@ use shared_protocol::{
 };
 use shared_vad::Vad;
 use std::ffi::c_int;
+use std::sync::Arc;
 use std::time::Instant;
 use tracing::info;
-use std::sync::Arc;
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperState};
 
 const MAX_PROMPT_TOKENS: usize = 224; // half of whisper's 448-token context
@@ -38,6 +38,8 @@ pub struct Session {
     opts: TranscribeOpts,
     max_len: i32,
     max_tokens: i32,
+    single_segment: bool,
+    max_initial_ts: f32,
 }
 
 impl Session {
@@ -47,6 +49,8 @@ impl Session {
         context: Option<String>,
         max_len: Option<i32>,
         max_tokens: Option<i32>,
+        single_segment: Option<bool>,
+        max_initial_ts: Option<f32>,
         sampling_strategy: SamplingStrategy,
         opts: TranscribeOpts,
     ) -> Result<Self> {
@@ -75,6 +79,8 @@ impl Session {
             opts,
             max_len: max_len.unwrap_or(0),
             max_tokens: max_tokens.unwrap_or(0),
+            single_segment: single_segment.unwrap_or(false),
+            max_initial_ts: max_initial_ts.unwrap_or(0.),
         })
     }
 
@@ -160,7 +166,8 @@ impl Session {
         params.set_suppress_nst(true);
         params.set_max_len(self.max_len);
         params.set_max_tokens(self.max_tokens);
-        params.set_max_initial_ts(0.);
+        params.set_max_initial_ts(self.max_initial_ts);
+        params.set_single_segment(self.single_segment);
         params.set_print_progress(false);
         params.set_print_special(false);
         params.set_print_realtime(false);
@@ -207,6 +214,7 @@ impl Session {
             duration,
             realtime_factor
         );
+
         let n_segments = self.whisper_state.full_n_segments();
 
         let mut complete = Vec::new();
