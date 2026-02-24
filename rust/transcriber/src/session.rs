@@ -260,6 +260,7 @@ impl Session {
 
             let segment_text = tokens
                 .iter()
+                .filter(|t| !t.special)
                 .map(|t| t.text.as_str())
                 .collect::<String>()
                 .trim()
@@ -399,6 +400,7 @@ impl Session {
 
             let segment_text = tokens
                 .iter()
+                .filter(|t| !t.special)
                 .map(|t| t.text.as_str())
                 .collect::<String>()
                 .trim()
