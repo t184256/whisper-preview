@@ -18,6 +18,7 @@ pub enum ClientMessage {
         single_segment: Option<bool>, // force single segment output
         max_initial_ts: Option<f32>, // max timestamp for first segment start (seconds)
         no_preview: Option<bool>, // only transcribe after EndOfStream
+        two_stroke: Option<bool>, // server-side verification of second-to-last segment
     },
     // no explicit AudioChunk message - binary frames are implicitly audio
     Advance {
@@ -55,6 +56,14 @@ pub enum ServerMessage {
         incomplete: Option<Segment>, // still-growing preview
         fast_preview: Option<Segment>, // preview from lower quality model
         advance_cs: i64, // beginning timestamp of the transcription result
+    },
+    AdvanceSuggestion {
+        advance_cs: i64,               // matches the Transcription this belongs to
+        timestamp_cs: i64,             // suggested advance point
+        segments: Vec<Segment>,        // re-transcription results
+        original_last_segment: Segment, // last segment from the original transcription
+        exact_match: bool,             // whether the first re-transcribed segment matches exactly
+        n_matching_tokens: usize,      // number of leading non-special tokens that match
     },
     Error {
         message: String,
