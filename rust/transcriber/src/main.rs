@@ -181,12 +181,14 @@ fn compare_segments(
         .iter()
         .filter(|t| !t.special)
         .map(|t| normalize_for_comparison(&t.text))
+        .filter(|t| !t.is_empty()) // ex-punctuation
         .collect();
     let new_tokens: Vec<String> = retranscribed
         .iter()
         .flat_map(|s| s.tokens.iter())
         .filter(|t| !t.special)
         .map(|t| normalize_for_comparison(&t.text))
+        .filter(|t| !t.is_empty()) // ex-punctuation
         .collect();
     let n_matching_tokens = orig_tokens
         .iter()
